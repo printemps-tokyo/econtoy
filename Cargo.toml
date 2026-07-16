@@ -1,0 +1,28 @@
+[package]
+name = "econtoy"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A tiny agent-based economy simulator for the terminal. Watch emergent inflation, unemployment, and credit-driven booms and busts. Educational toy, zero dependencies."
+authors = ["printemps.tokyo <develop@printemps.tokyo>"]
+repository = "https://github.com/printemps-tokyo/econtoy"
+homepage = "https://github.com/printemps-tokyo/econtoy"
+readme = "README.md"
+keywords = ["economy", "simulation", "agent-based", "cli", "education"]
+categories = ["command-line-utilities", "simulation", "science"]
+
+[[bin]]
+name = "econtoy"
+path = "src/main.rs"
+
+[lib]
+name = "econtoy"
+path = "src/lib.rs"
+
+[dependencies]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
