@@ -2,6 +2,7 @@
 name = "econtoy"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.85"
 license = "MIT"
 description = "A tiny agent-based economy simulator for the terminal. Watch emergent inflation, unemployment, and credit-driven booms and busts. Educational toy, zero dependencies."
 authors = ["printemps.tokyo <develop@printemps.tokyo>"]
