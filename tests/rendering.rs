@@ -56,7 +56,8 @@ fn csv_shape_is_stable() {
     assert_eq!(lines.len(), 31, "header + one row per tick");
     assert_eq!(
         lines[0],
-        "tick,cpi,gdp,unemployment,inflation,avg_money,credit,broad_money"
+        "tick,cpi,gdp,unemployment,inflation,avg_money,credit,broad_money,\
+         nominal_gdp,taxes,gov_spending,deficit,gov_debt"
     );
     // Every data row has the same number of columns as the header.
     let cols = lines[0].split(',').count();
@@ -73,7 +74,7 @@ fn json_shape_is_stable() {
     };
     let mut sim = Simulation::new(&params);
     let summary = sim.run();
-    let json = to_json(&params, sim.series(), &summary);
+    let json = to_json(&params, sim.series(), &summary, Some("a \"quoted\" name"));
     for key in [
         "\"params\"",
         "\"series\"",
@@ -81,6 +82,10 @@ fn json_shape_is_stable() {
         "\"cpi\"",
         "\"inflation\"",
         "\"base_money\"",
+        "\"gov_debt\"",
+        "\"debt_to_gdp\"",
+        "\"shocks\": []",
+        "\"scenario\": \"a \\\"quoted\\\" name\"",
     ] {
         assert!(json.contains(key), "json missing {key}");
     }

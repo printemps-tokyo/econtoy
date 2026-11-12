@@ -1,0 +1,10 @@
+# Spending far above what a 10% tax can raise. With no money growth of its
+# own, the economy is still flooded with money: the deficit is paid with
+# new deposits, prices rise about 2% a tick, and debt compounds.
+name = Deficit paid with new money
+description = Spending well beyond the tax take; the deficit drives inflation and debt.
+ticks = 200
+money-growth = 0
+income-tax = 10
+profit-tax = 10
+gov-spending = 30

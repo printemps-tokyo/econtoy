@@ -1,10 +1,10 @@
 [package]
 name = "econtoy"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
-description = "A tiny agent-based economy simulator for the terminal. Watch emergent inflation, unemployment, and credit-driven booms and busts. Educational toy, zero dependencies."
+description = "A tiny agent-based economy simulator for the terminal. Watch emergent inflation, unemployment, credit booms, and fiscal policy play out, or replay scenario files. Educational toy, zero dependencies."
 authors = ["printemps.tokyo <develop@printemps.tokyo>"]
 repository = "https://github.com/printemps-tokyo/econtoy"
 homepage = "https://github.com/printemps-tokyo/econtoy"

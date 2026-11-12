@@ -1,0 +1,9 @@
+# Money grows 4% a year with a 1% policy rate, and prices drift up. At
+# tick 100 the central bank raises the rate to 15%: the interest drain
+# pulls inflation down from about 3% a year to between 1% and 2%.
+name = Rate hike against inflation
+description = 4% money growth at a 1% rate, then a hike to 15% at tick 100.
+ticks = 240
+money-growth = 4
+interest-rate = 1
+at 100: interest-rate = 15

@@ -1,0 +1,9 @@
+# A government that taxes and spends about the same share of income.
+# Taxes scale with nominal income, so the budget settles near balance by
+# itself and the economy stays at full employment.
+name = Balanced budget
+description = 20% taxes and spending of about the same size; the budget settles near balance.
+ticks = 240
+income-tax = 20
+profit-tax = 20
+gov-spending = 22

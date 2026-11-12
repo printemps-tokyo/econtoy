@@ -1,0 +1,12 @@
+# Low taxes and high spending run a deficit that is paid for with new money,
+# so prices and debt climb together. At tick 120 taxes rise and spending is
+# cut: debt falls, prices drop back, and unemployment rises.
+name = Austerity after a decade of deficits
+description = Ten years of deficits, then higher taxes and lower spending at tick 120.
+ticks = 240
+income-tax = 12
+profit-tax = 12
+gov-spending = 28
+at 120: income-tax = 25
+at 120: profit-tax = 25
+at 120: gov-spending = 20

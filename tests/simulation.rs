@@ -47,8 +47,8 @@ fn output_is_byte_identical_across_runs() {
     let params = base_params();
     let a = run(&params);
     let b = run(&params);
-    let ja = to_json(&params, a.series(), &a.summary());
-    let jb = to_json(&params, b.series(), &b.summary());
+    let ja = to_json(&params, a.series(), &a.summary(), None);
+    let jb = to_json(&params, b.series(), &b.summary(), None);
     assert_eq!(ja, jb);
     assert_eq!(to_csv(a.series()), to_csv(b.series()));
 }

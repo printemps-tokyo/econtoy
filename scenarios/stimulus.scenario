@@ -1,0 +1,14 @@
+# Households cut spending by half for three years. Twelve ticks later the
+# government nearly doubles its purchases for three years, then returns to
+# its old program. Compare with the slump alone by deleting the two `at`
+# lines: unemployment peaks lower with the stimulus, but debt and a burst of
+# inflation follow.
+name = Fiscal stimulus in a slump
+description = A three-year demand slump met by a temporary rise in government purchases.
+ticks = 200
+income-tax = 20
+profit-tax = 20
+gov-spending = 22
+shock = demand:60:-50:36
+at 66: gov-spending = 40
+at 102: gov-spending = 22

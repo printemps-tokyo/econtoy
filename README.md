@@ -2,7 +2,8 @@
 
 A tiny agent-based economy simulator you run in the terminal to watch emergent
 macro behavior (inflation, unemployment, credit-driven booms and busts) as you
-turn knobs like the interest rate and money-supply growth.
+turn knobs like the interest rate, money-supply growth, taxes, and government
+spending, or replay a whole policy story from a scenario file.
 
 econtoy is an educational emergence toy, not a real macroeconomic model. It
 deliberately favors a small set of clear, legible rules over realism. Do not use
@@ -44,6 +45,17 @@ econtoy --interest-rate 12 --money-growth 6 --ticks 300
 # Blow a bubble: inject 35% extra money at tick 120
 econtoy --interest-rate 3 --money-growth 3 --shock money:120:35
 
+# Add a government: tax income and profit, buy a share of output
+econtoy --income-tax 20 --profit-tax 20 --gov-spending 22
+
+# Change policy mid-run: raise the policy rate to 15% at tick 100
+econtoy --money-growth 4 --interest-rate 1 --shock set:100:interest-rate:15
+
+# Replay a built-in scenario, or one of your own
+econtoy --list-scenarios
+econtoy --scenario stimulus
+econtoy --scenario my-economy.scenario --ticks 400
+
 # Machine-readable output for scripts and plots
 econtoy --json > run.json
 econtoy --csv  > run.csv
@@ -51,7 +63,7 @@ econtoy --csv  > run.csv
 
 ## The model
 
-The economy has three kinds of agent.
+The economy has three kinds of agent, plus an optional government.
 
 - Households supply labor, earn wages, receive firm dividends, and hold
   money as bank deposits. Each tick they try to consume a fraction (the marginal
@@ -65,6 +77,17 @@ The economy has three kinds of agent.
   and contracts with credit, capped by a reserve ratio (money multiplier
   `1 / reserve_ratio`). Interest paid by borrowers accrues to bank equity and
   leaves circulation, which is the toy's monetary-transmission channel.
+- The government (active when any tax or spending setting is above zero)
+  withholds a flat income tax from wages and dividends, takes a flat tax on
+  firm profit, and buys goods alongside households. Its purchases are a share
+  of full-employment wage income, indexed to last tick's price level, so the
+  real program stays the same as prices move. The treasury keeps an account
+  at the bank: a deficit is paid from an overdraft that stands in for selling
+  bonds, the overdraft is the public debt, and it pays the policy rate on it.
+  The overdraft is not counted against the bank's lending cap, so government
+  borrowing neither crowds out nor adds to private credit. When spending runs
+  ahead of what the taxes can raise, the deficit is paid with new deposits and
+  prices rise.
 
 ### The knobs
 
@@ -78,7 +101,12 @@ The economy has three kinds of agent.
 | `--money-growth PCT` | Annualized growth of base money, percent | 2 | >= -100 |
 | `--mpc F` | Marginal propensity to consume out of money on hand | 0.3 | 0..=1 |
 | `--reserve-ratio F` | Bank reserve ratio; multiplier is `1/ratio` | 0.1 | 0.001..=1 |
-| `--shock SPEC` | Add a shock (repeatable, see below) | none | |
+| `--income-tax PCT` | Tax on household wages and dividends, percent | 0 | 0..=100 |
+| `--profit-tax PCT` | Tax on firm profit before dividends, percent | 0 | 0..=100 |
+| `--gov-spending PCT` | Government purchases, percent of full-employment wage income | 0 | 0..=100 |
+| `--shock SPEC` | Add a shock or policy change (repeatable, see below) | none | |
+| `--scenario NAME\|FILE` | Load a scenario file or a built-in scenario | none | |
+| `--list-scenarios` | List the built-in scenarios and exit | | |
 
 Annualized rates are converted to per-tick rates by dividing by 12 (twelve ticks
 per year). Money growth is applied as a helicopter drop split equally across
@@ -86,26 +114,78 @@ households each tick.
 
 ### Shocks
 
-`--shock` may be passed more than once. Two kinds are supported:
+`--shock` may be passed more than once. Three kinds are supported:
 
 - `money:TICK:PCT` injects `PCT`% of the current base money into households at
   tick `TICK` (a one-off money-supply shock). Good for demonstrating a bubble
   and its aftermath.
 - `demand:TICK:PCT:DUR` raises the propensity to consume by `PCT`% for `DUR`
-  ticks starting at `TICK` (a temporary confidence / demand shock).
+  ticks starting at `TICK` (a temporary confidence / demand shock). A
+  negative `PCT` is a slump.
+- `set:TICK:KNOB:VALUE` sets a policy knob to `VALUE` from tick `TICK` on.
+  The knobs are `interest-rate`, `money-growth`, `income-tax`, `profit-tax`,
+  and `gov-spending`, with the same ranges as their flags.
 
 ```bash
 econtoy --shock money:120:35
 econtoy --shock demand:80:60:20 --shock money:150:20
+econtoy --gov-spending 22 --income-tax 20 \
+  --shock demand:60:-50:36 --shock set:66:gov-spending:40 --shock set:102:gov-spending:22
 ```
+
+### Scenario files
+
+A scenario file bundles settings, shocks, and policy changes into one plain
+text file, so a policy story can be saved, shared, and replayed:
+
+```
+# Households cut spending by half for three years; the government steps in.
+name = Fiscal stimulus in a slump
+description = A three-year demand slump met by a temporary rise in government purchases.
+ticks = 200
+income-tax = 20
+profit-tax = 20
+gov-spending = 22
+shock = demand:60:-50:36
+at 66: gov-spending = 40
+at 102: gov-spending = 22
+```
+
+- `#` starts a comment (so `name` and `description` cannot contain `#`), and
+  blank lines are ignored.
+- `KEY = VALUE` takes any flag name without the leading `--` (`ticks`,
+  `seed`, `households`, `firms`, `interest-rate`, `money-growth`, `mpc`,
+  `reserve-ratio`, `income-tax`, `profit-tax`, `gov-spending`, `shock`),
+  plus `name` and `description`. `_` and `-` are interchangeable in keys.
+  `shock` may repeat; any other key may appear once.
+- `at TICK: KNOB = VALUE` schedules a policy change, the same as
+  `--shock set:TICK:KNOB:VALUE`.
+- Errors name the line: `my.scenario: line 7: 'ticks' is set more than once`.
+
+`--scenario` reads a file when the argument contains `/` or `.` or names an
+existing file, and a built-in scenario otherwise. Flags given after
+`--scenario` override the file's settings; shocks from both are kept.
+
+Built-in scenarios (the files are in `scenarios/`):
+
+| Name | Story |
+| --- | --- |
+| `balanced` | 20% taxes and spending of about the same size. Taxes scale with nominal income, so the budget settles near balance by itself. |
+| `stimulus` | A three-year demand slump met by a temporary rise in government purchases. Unemployment stays lower than in the slump alone, at the cost of debt and a burst of inflation. |
+| `austerity` | Ten years of deficits paid with new money, then higher taxes and lower spending at tick 120: debt and prices fall, unemployment rises. |
+| `rate-hike` | 4% money growth at a 1% rate, then a hike to 15% at tick 100 pulls inflation from about 3% a year to between 1% and 2%. |
+| `deficit-money` | Spending well beyond what a 10% tax can raise: the deficit drives inflation and compounding debt. |
 
 ### Output modes
 
 - default: a human report (final indicators plus block sparklines that respect
-  the terminal width, taken from `COLUMNS`).
+  the terminal width, taken from `COLUMNS`). With a government it adds tax
+  revenue, spending, the deficit, public debt, debt as a percent of annual
+  nominal output, and deficit and debt charts.
 - `--json`: the full time series and final summary as JSON.
 - `--csv`: one row per tick with every tracked series.
-- `--quiet`: only the final summary line.
+- `--quiet`: only the final summary line (with deficit, debt, and debt/GDP
+  when there is a government).
 
 ## Examples
 
@@ -148,9 +228,12 @@ balances (`econtoy --shock money:120:35 --interest-rate 3 --money-growth 3`).
 
 ```json
 {
+  "scenario": "Fiscal stimulus in a slump",
   "params": {
     "ticks": 200, "seed": 42, "households": 200, "firms": 20,
-    "interest_rate": 5, "money_growth": 2, "mpc": 0.3, "reserve_ratio": 0.1
+    "interest_rate": 5, "money_growth": 2, "mpc": 0.3, "reserve_ratio": 0.1,
+    "income_tax": 20, "profit_tax": 20, "gov_spending": 22,
+    "shocks": ["demand:60:-50:36", "set:66:gov-spending:40", "set:102:gov-spending:22"]
   },
   "series": {
     "cpi":          [/* one value per tick */],
@@ -159,16 +242,27 @@ balances (`econtoy --shock money:120:35 --interest-rate 3 --money-growth 3`).
     "inflation":    [/* period-over-period CPI change, percent */],
     "avg_money":    [/* mean household deposits per tick */],
     "credit":       [/* loans outstanding (within-tick peak) per tick */],
-    "broad_money":  [/* total deposits per tick */]
+    "broad_money":  [/* household and firm deposits per tick */],
+    "nominal_gdp":  [/* value of goods sold per tick */],
+    "taxes":        [/* income plus profit tax collected per tick */],
+    "gov_spending": [/* government purchases paid per tick */],
+    "deficit":      [/* spending + debt interest - taxes, per tick */],
+    "gov_debt":     [/* public debt at the end of each tick */]
   },
   "summary": {
-    "cpi": 145.07, "avg_inflation": 2.46, "gdp": 200.0, "unemployment": 0.0,
-    "avg_money": 3.84, "credit": 200.0, "broad_money": 768.56, "base_money": 935.43
+    "cpi": 119.59, "avg_inflation": 1.46, "gdp": 200.66, "unemployment": 0.0,
+    "avg_money": 2.29, "credit": 200.0, "broad_money": 458.4, "base_money": 935.43,
+    "taxes": 53.75, "gov_spending": 52.65, "deficit": -1.09, "gov_debt": -201.19,
+    "debt_to_gdp": -7.01
   }
 }
 ```
 
+`scenario` is present only when the run used a scenario file with a `name`.
+`params` holds the starting settings; policy changes are listed in `shocks`.
 `avg_inflation` is the mean per-tick inflation annualized (multiplied by 12).
+`gov_debt` is negative when the government has saved more than it borrowed,
+and `debt_to_gdp` divides it by 12 times the final tick's nominal output.
 All arrays have length `ticks`.
 
 ## CSV schema
@@ -176,16 +270,19 @@ All arrays have length `ticks`.
 One header row and one row per tick:
 
 ```
-tick,cpi,gdp,unemployment,inflation,avg_money,credit,broad_money
-0,96.57,262.62,0.0022,0,3.35,199.56,670.74
-1,94.72,272.39,0,-1.92,3.36,200,671.02
+tick,cpi,gdp,unemployment,inflation,avg_money,credit,broad_money,nominal_gdp,taxes,gov_spending,deficit,gov_debt
+0,96.57,262.6,0.002182,0,3.354,199.6,670.7,261.3,0,0,0,0
+1,94.72,272.4,0,-1.917,3.355,200,671,261.8,0,0,0,0
 ...
 ```
+
+(Values rounded here; the real output prints full precision.)
 
 ## How the model works
 
 Each tick runs the following ordered sequence:
 
+0. Policy changes. Any `set:` change scheduled for this tick takes effect.
 1. Money growth. New base money (`money_growth`/12 percent of the current
    base) is dropped equally on households.
 2. Shocks. Any money shock scheduled for this tick is injected; any active
@@ -196,16 +293,19 @@ Each tick runs the following ordered sequence:
    the fixed labor force.
 4. Wage financing and payment. Firms cover the wage bill from cash, borrowing
    the shortfall from the bank subject to the reserve cap. Loans create deposits.
-   Production is added to inventory and wages are paid to households.
-5. Goods market and price adjustment. Households spend `mpc` of their money.
+   Production is added to inventory and wages are paid to households, less
+   the income tax.
+5. Goods market and price adjustment. Households spend `mpc` of their money,
+   and the government places its order.
    Demand is allocated across firms in proportion to inventory; each firm sells
    what it can, then moves its price up if buyers wanted more than it had and
    down if inventory was left over.
 6. Interest accrual. Borrowers pay interest on their loans to the bank as
-   equity, permanently removing that money from circulation.
-7. Repayment and dividends. Firms repay loans from revenue and distribute any
-   remaining profit to households as dividends, so they run lean and borrow again
-   next tick.
+   equity, permanently removing that money from circulation. The treasury pays
+   the same rate on its overdraft.
+7. Repayment and dividends. Firms repay loans from revenue, pay the profit tax,
+   and distribute the rest to households as dividends (less the income tax),
+   so they run lean and borrow again next tick.
 8. Bookkeeping. All tracked series are recorded.
 
 ### Tracked series
@@ -217,6 +317,9 @@ Each tick runs the following ordered sequence:
 - Credit outstanding: loans outstanding at their within-tick peak.
 - Broad money: total deposits held by households and firms.
 - Inflation: period-over-period percentage change in CPI.
+- Nominal output: the value of goods sold, to households and the government.
+- Taxes, government spending, deficit (spending plus debt interest minus
+  taxes), and public debt (the running sum of deficits).
 
 ### Accounting identity
 
@@ -225,13 +328,15 @@ plus a conserved base-money quantity. The following identity holds every tick, t
 floating-point precision, regardless of growth or shocks:
 
 ```
-base_money == total_deposits + bank_equity - total_loans
+base_money == total_deposits + treasury_balance + bank_equity - total_loans
 ```
 
+`treasury_balance` is minus the public debt, and zero without a government.
 When `--money-growth 0` is set and there are no shocks, `base_money` itself is
 constant for the entire run: nothing creates or destroys outside money, and every
 other operation (wages, consumption, lending, repayment, interest, dividends) is
-a transfer that preserves the identity. Both facts are asserted by the test
+a transfer that preserves the identity; so are taxes and government purchases.
+Both facts are asserted by the test
 suite on every tick.
 
 ## Development

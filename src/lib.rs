@@ -16,6 +16,8 @@
 
 use std::fmt::Write as _;
 
+pub mod scenario;
+
 /// Number of ticks that make up one year. Annualized rates (interest,
 /// money growth) are divided by this to obtain a per-tick rate.
 pub const PERIODS_PER_YEAR: f64 = 12.0;
@@ -100,6 +102,88 @@ pub enum Shock {
     /// Multiply the propensity to consume by `1 + pct/100` for `dur` ticks
     /// starting at `tick` (a confidence / demand shock).
     Demand { tick: usize, pct: f64, dur: usize },
+    /// Set a policy knob to `value` from `tick` onward (a policy change).
+    Policy { tick: usize, knob: Knob, value: f64 },
+}
+
+/// A policy setting that can change mid-run through [`Shock::Policy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Knob {
+    /// Annualized policy interest rate, percent.
+    InterestRate,
+    /// Annualized base-money growth, percent.
+    MoneyGrowth,
+    /// Flat tax on household income (wages and dividends), percent.
+    IncomeTax,
+    /// Flat tax on firm profit, percent.
+    ProfitTax,
+    /// Government purchases, percent of full-employment wage income.
+    GovSpending,
+}
+
+impl Knob {
+    /// Every knob, in display order.
+    pub const ALL: [Knob; 5] = [
+        Knob::InterestRate,
+        Knob::MoneyGrowth,
+        Knob::IncomeTax,
+        Knob::ProfitTax,
+        Knob::GovSpending,
+    ];
+
+    /// The knob's name as used by flags, shock specs, and scenario files.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Knob::InterestRate => "interest-rate",
+            Knob::MoneyGrowth => "money-growth",
+            Knob::IncomeTax => "income-tax",
+            Knob::ProfitTax => "profit-tax",
+            Knob::GovSpending => "gov-spending",
+        }
+    }
+
+    /// Look a knob up by name (`_` and `-` are interchangeable).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let name = normalize_key(name);
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+
+    /// Check that `value` is in range for this knob.
+    ///
+    /// # Errors
+    /// Returns a message naming the knob and its valid range.
+    pub fn check(self, value: f64) -> Result<(), String> {
+        let ok = value.is_finite()
+            && match self {
+                Knob::InterestRate | Knob::IncomeTax | Knob::ProfitTax | Knob::GovSpending => {
+                    (0.0..=100.0).contains(&value)
+                }
+                Knob::MoneyGrowth => value >= -100.0,
+            };
+        if ok {
+            return Ok(());
+        }
+        Err(match self {
+            Knob::InterestRate => {
+                "interest-rate must be between 0 and 100 (annualized percent)".to_string()
+            }
+            Knob::MoneyGrowth => {
+                "money-growth must be finite and >= -100 (annualized percent)".to_string()
+            }
+            Knob::IncomeTax => "income-tax must be between 0 and 100 (percent)".to_string(),
+            Knob::ProfitTax => "profit-tax must be between 0 and 100 (percent)".to_string(),
+            Knob::GovSpending => {
+                "gov-spending must be between 0 and 100 (percent of full-employment wages)"
+                    .to_string()
+            }
+        })
+    }
+}
+
+fn normalize_key(key: &str) -> String {
+    key.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 impl Shock {
@@ -140,11 +224,51 @@ impl Shock {
                 }
                 Ok(Shock::Demand { tick, pct, dur })
             }
+            "set" => {
+                let [_, tick, knob, value] = parts.as_slice() else {
+                    return Err(format!(
+                        "policy change expects 'set:TICK:KNOB:VALUE', got '{spec}'"
+                    ));
+                };
+                let tick = parse_usize(tick, "policy tick")?;
+                let knob = Knob::from_name(knob).ok_or_else(|| unknown_knob(knob))?;
+                let value = parse_f64(value, "policy value")?;
+                Ok(Shock::Policy { tick, knob, value })
+            }
             other => Err(format!(
-                "unknown shock kind '{other}' (expected 'money' or 'demand')"
+                "unknown shock kind '{other}' (expected 'money', 'demand', or 'set')"
             )),
         }
     }
+
+    /// The tick at which the shock starts.
+    #[must_use]
+    pub fn tick(&self) -> usize {
+        match *self {
+            Shock::Money { tick, .. } | Shock::Demand { tick, .. } | Shock::Policy { tick, .. } => {
+                tick
+            }
+        }
+    }
+
+    /// The shock as a spec string that [`Shock::parse`] reads back.
+    #[must_use]
+    pub fn spec(&self) -> String {
+        match *self {
+            Shock::Money { tick, pct } => format!("money:{tick}:{pct}"),
+            Shock::Demand { tick, pct, dur } => format!("demand:{tick}:{pct}:{dur}"),
+            Shock::Policy { tick, knob, value } => format!("set:{tick}:{}:{value}", knob.name()),
+        }
+    }
+}
+
+fn unknown_knob(name: &str) -> String {
+    let names: Vec<&str> = Knob::ALL.iter().map(|k| k.name()).collect();
+    format!(
+        "unknown policy knob '{}' (expected one of: {})",
+        name.trim(),
+        names.join(", ")
+    )
 }
 
 fn parse_usize(s: &str, what: &str) -> Result<usize, String> {
@@ -182,6 +306,13 @@ pub struct Params {
     pub mpc: f64,
     /// Bank reserve ratio; the money multiplier is `1 / reserve_ratio`.
     pub reserve_ratio: f64,
+    /// Flat tax on household income (wages and dividends), percent (0..=100).
+    pub income_tax: f64,
+    /// Flat tax on firm profit before dividends, percent (0..=100).
+    pub profit_tax: f64,
+    /// Government purchases per tick, as a percent of full-employment wage
+    /// income indexed to the price level (0..=100).
+    pub gov_spending: f64,
     /// Scheduled shocks.
     pub shocks: Vec<Shock>,
 }
@@ -197,6 +328,9 @@ impl Default for Params {
             money_growth: 2.0,
             mpc: 0.3,
             reserve_ratio: 0.1,
+            income_tax: 0.0,
+            profit_tax: 0.0,
+            gov_spending: 0.0,
             shocks: Vec::new(),
         }
     }
@@ -209,45 +343,126 @@ impl Params {
     /// Returns a message describing the first invalid parameter.
     pub fn validate(&self) -> Result<(), String> {
         if self.ticks == 0 {
-            return Err("--ticks must be >= 1".to_string());
+            return Err("ticks must be >= 1".to_string());
         }
         if self.households == 0 {
-            return Err("--households must be >= 1".to_string());
+            return Err("households must be >= 1".to_string());
         }
         if self.firms == 0 {
-            return Err("--firms must be >= 1".to_string());
+            return Err("firms must be >= 1".to_string());
         }
-        if !(0.0..=100.0).contains(&self.interest_rate) {
-            return Err(
-                "--interest-rate must be between 0 and 100 (annualized percent)".to_string(),
-            );
-        }
-        if !self.interest_rate.is_finite() {
-            return Err("--interest-rate must be finite".to_string());
-        }
-        if !self.money_growth.is_finite() || self.money_growth < -100.0 {
-            return Err(
-                "--money-growth must be finite and >= -100 (annualized percent)".to_string(),
-            );
+        for knob in Knob::ALL {
+            knob.check(self.knob(knob))?;
         }
         if !(0.0..=1.0).contains(&self.mpc) {
-            return Err("--mpc must be between 0 and 1".to_string());
+            return Err("mpc must be between 0 and 1".to_string());
         }
         if !(0.001..=1.0).contains(&self.reserve_ratio) {
-            return Err("--reserve-ratio must be between 0.001 and 1".to_string());
+            return Err("reserve-ratio must be between 0.001 and 1".to_string());
         }
         for shock in &self.shocks {
-            let tick = match shock {
-                Shock::Money { tick, .. } | Shock::Demand { tick, .. } => *tick,
-            };
+            let tick = shock.tick();
             if tick >= self.ticks {
                 return Err(format!(
-                    "shock scheduled at tick {tick} but the run is only {} ticks",
+                    "shock '{}' is scheduled at tick {tick} but the run is only {} ticks",
+                    shock.spec(),
                     self.ticks
                 ));
             }
+            if let Shock::Policy { knob, value, .. } = *shock {
+                knob.check(value)
+                    .map_err(|e| format!("in '{}': {e}", shock.spec()))?;
+            }
         }
         Ok(())
+    }
+
+    /// The setting names accepted by [`Params::set`], as used by flags
+    /// (`--NAME`) and scenario files (`NAME = VALUE`).
+    pub const KEYS: [&'static str; 13] = [
+        "ticks",
+        "seed",
+        "households",
+        "firms",
+        "interest-rate",
+        "money-growth",
+        "mpc",
+        "reserve-ratio",
+        "income-tax",
+        "profit-tax",
+        "gov-spending",
+        "shock",
+        "set",
+    ];
+
+    /// Set one parameter from its name and raw text. `shock` appends a shock
+    /// spec, and `set` appends a policy change written `TICK:KNOB:VALUE`.
+    /// Ranges are checked later by [`Params::validate`].
+    ///
+    /// # Errors
+    /// Returns a message for an unknown name or an unparsable value.
+    pub fn set(&mut self, key: &str, raw: &str) -> Result<(), String> {
+        let key = normalize_key(key);
+        let raw = raw.trim();
+        fn num<T: std::str::FromStr>(key: &str, raw: &str) -> Result<T, String> {
+            raw.parse::<T>()
+                .map_err(|_| format!("invalid value for {key}: '{raw}'"))
+        }
+        match key.as_str() {
+            "ticks" => self.ticks = num(&key, raw)?,
+            "seed" => self.seed = num(&key, raw)?,
+            "households" => self.households = num(&key, raw)?,
+            "firms" => self.firms = num(&key, raw)?,
+            "mpc" => self.mpc = num(&key, raw)?,
+            "reserve-ratio" => self.reserve_ratio = num(&key, raw)?,
+            "shock" => self.shocks.push(Shock::parse(raw)?),
+            "set" => self.shocks.push(Shock::parse(&format!("set:{raw}"))?),
+            other => match Knob::from_name(other) {
+                Some(knob) => *self.knob_mut(knob) = num(&key, raw)?,
+                None => return Err(format!("unknown setting '{other}'")),
+            },
+        }
+        Ok(())
+    }
+
+    /// The current value of a policy knob.
+    #[must_use]
+    pub fn knob(&self, knob: Knob) -> f64 {
+        match knob {
+            Knob::InterestRate => self.interest_rate,
+            Knob::MoneyGrowth => self.money_growth,
+            Knob::IncomeTax => self.income_tax,
+            Knob::ProfitTax => self.profit_tax,
+            Knob::GovSpending => self.gov_spending,
+        }
+    }
+
+    fn knob_mut(&mut self, knob: Knob) -> &mut f64 {
+        match knob {
+            Knob::InterestRate => &mut self.interest_rate,
+            Knob::MoneyGrowth => &mut self.money_growth,
+            Knob::IncomeTax => &mut self.income_tax,
+            Knob::ProfitTax => &mut self.profit_tax,
+            Knob::GovSpending => &mut self.gov_spending,
+        }
+    }
+
+    /// Whether the run has a government sector at any point: a tax or
+    /// spending setting above zero, or a policy change that sets one.
+    #[must_use]
+    pub fn has_government(&self) -> bool {
+        self.income_tax > 0.0
+            || self.profit_tax > 0.0
+            || self.gov_spending > 0.0
+            || self.shocks.iter().any(|s| {
+                matches!(
+                    s,
+                    Shock::Policy {
+                        knob: Knob::IncomeTax | Knob::ProfitTax | Knob::GovSpending,
+                        ..
+                    }
+                )
+            })
     }
 }
 
@@ -272,6 +487,16 @@ pub struct Series {
     pub inflation: Vec<f64>,
     /// Broad money: total deposits held by households and firms.
     pub broad_money: Vec<f64>,
+    /// Nominal output: the value of goods sold this tick.
+    pub nominal_gdp: Vec<f64>,
+    /// Tax revenue collected this tick (income plus profit tax).
+    pub taxes: Vec<f64>,
+    /// Government purchases paid for this tick.
+    pub gov_spending: Vec<f64>,
+    /// Government deficit this tick: spending plus debt interest minus taxes.
+    pub deficit: Vec<f64>,
+    /// Public debt at the end of the tick (negative means net savings).
+    pub gov_debt: Vec<f64>,
 }
 
 impl Series {
@@ -307,6 +532,16 @@ pub struct Summary {
     pub broad_money: f64,
     /// Conserved base money.
     pub base_money: f64,
+    /// Final tick's tax revenue.
+    pub taxes: f64,
+    /// Final tick's government purchases.
+    pub gov_spending: f64,
+    /// Final tick's deficit.
+    pub deficit: f64,
+    /// Final public debt (negative means net savings).
+    pub gov_debt: f64,
+    /// Final public debt as a percent of annualized nominal output.
+    pub debt_to_gdp: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +585,10 @@ pub struct Simulation {
     /// it; every other operation preserves the identity
     /// `base_money == total_deposits + bank_equity - total_loans`.
     base_money: f64,
+    /// The treasury's account at the bank. It goes negative when spending
+    /// runs ahead of taxes (an overdraft standing in for bond sales); minus
+    /// this balance is the public debt.
+    gov_balance: f64,
     init_price_mean: f64,
     tick: usize,
     series: Series,
@@ -396,10 +635,23 @@ impl Simulation {
             firms,
             bank: Bank::default(),
             base_money,
+            gov_balance: 0.0,
             init_price_mean,
             tick: 0,
             series: Series::default(),
         }
+    }
+
+    /// Public debt: minus the treasury's balance (negative means net savings).
+    #[must_use]
+    pub fn gov_debt(&self) -> f64 {
+        0.0 - self.gov_balance
+    }
+
+    /// The parameters in force now, after any policy changes so far.
+    #[must_use]
+    pub fn current_params(&self) -> &Params {
+        &self.params
     }
 
     /// Total deposits held across households and firms (broad money).
@@ -429,10 +681,12 @@ impl Simulation {
     }
 
     /// The residual of the accounting identity
-    /// `base_money - (deposits + equity - loans)`. It must stay ~0 every tick.
+    /// `base_money - (deposits + treasury balance + equity - loans)`. It must
+    /// stay ~0 every tick.
     #[must_use]
     pub fn accounting_residual(&self) -> f64 {
-        self.base_money - (self.total_deposits() + self.bank.equity - self.total_loans())
+        self.base_money
+            - (self.total_deposits() + self.gov_balance + self.bank.equity - self.total_loans())
     }
 
     /// Borrow the recorded time series.
@@ -448,26 +702,55 @@ impl Simulation {
     }
 
     /// Inject `amount` of new base money, split equally across households.
+    /// A negative amount withdraws money, but never more than a household
+    /// holds; base money falls by what was actually withdrawn.
     fn inject(&mut self, amount: f64) {
         if amount == 0.0 {
             return;
         }
         let per = amount / self.households.len() as f64;
+        let mut applied = 0.0;
         for h in &mut self.households {
-            h.money += per;
+            let delta = if per < 0.0 {
+                per.max(-h.money.max(0.0))
+            } else {
+                per
+            };
+            h.money += delta;
+            applied += delta;
         }
-        self.base_money += amount;
+        self.base_money += if per < 0.0 { applied } else { amount };
     }
 
     /// Advance the economy by exactly one tick.
     ///
-    /// The ordered sequence is: money growth, scheduled shocks, output &
-    /// hiring plan, wage financing and payment, goods-market clearing with
-    /// price adjustment, loan repayment, interest accrual, then metrics.
+    /// The ordered sequence is: policy changes, money growth, scheduled
+    /// shocks, output & hiring plan, wage financing, payment and income tax,
+    /// goods-market clearing (households and government) with price
+    /// adjustment, interest accrual, repayment, profit tax and dividends, then
+    /// metrics.
     pub fn step(&mut self) {
         let t = self.tick;
+
+        // 0. Policy changes take effect at the start of their tick.
+        let changes: Vec<(Knob, f64)> = self
+            .params
+            .shocks
+            .iter()
+            .filter_map(|s| match *s {
+                Shock::Policy { tick, knob, value } if tick == t => Some((knob, value)),
+                _ => None,
+            })
+            .collect();
+        for (knob, value) in changes {
+            *self.params.knob_mut(knob) = value;
+        }
+
         let rate = self.rate_per_tick();
         let households = self.households.len() as f64;
+        let income_tax = self.params.income_tax / 100.0;
+        let profit_tax = self.params.profit_tax / 100.0;
+        let mut taxes = 0.0;
 
         // 1. Money-supply growth (annualized percent -> per tick).
         let mg_tick = self.params.money_growth / 100.0 / PERIODS_PER_YEAR;
@@ -518,8 +801,11 @@ impl Simulation {
         //    the reserve constraint; if credit is scarce they hire fewer.
         //    Loans create deposits, so borrowing raises the running deposit
         //    total against which the money-multiplier cap is measured.
+        //    The treasury's balance counts with deposits, so the cap works out
+        //    as a limit on private loans against base money: government
+        //    borrowing neither crowds out nor adds to private credit.
         let deposit_cap = self.base_money / self.params.reserve_ratio;
-        let mut deposits = self.total_deposits();
+        let mut deposits = self.total_deposits() + self.gov_balance;
         let mut wage_pool = 0.0;
         let mut employment = 0.0;
         for (f, workers) in self.firms.iter_mut().zip(desired_workers.iter_mut()) {
@@ -546,8 +832,12 @@ impl Simulation {
         // revenue lets firms repay). This is the credit series we report.
         let peak_credit = self.total_loans();
         // Distribute wages uniformly across the labor force (representative
-        // households); unemployment is tracked as the utilization gap.
-        let wage_each = wage_pool / households;
+        // households); unemployment is tracked as the utilization gap. The
+        // income tax is withheld first.
+        let wage_tax = wage_pool * income_tax;
+        taxes += wage_tax;
+        self.gov_balance += wage_tax;
+        let wage_each = (wage_pool - wage_tax) / households;
         for h in &mut self.households {
             h.money += wage_each;
         }
@@ -561,9 +851,14 @@ impl Simulation {
         let intents: Vec<f64> = self
             .households
             .iter()
-            .map(|h| (effective_mpc * h.money * h.noise).clamp(0.0, h.money))
+            .map(|h| (effective_mpc * h.money * h.noise).clamp(0.0, h.money.max(0.0)))
             .collect();
-        let nominal_demand: f64 = intents.iter().sum();
+        // Government purchases: a share of full-employment wage income,
+        // indexed to last tick's price level so the real program is stable.
+        let price_level = last_or(&self.series.cpi, 100.0) / 100.0;
+        let gov_demand = self.params.gov_spending / 100.0 * households * WAGE * price_level;
+        let household_demand: f64 = intents.iter().sum();
+        let nominal_demand = household_demand + gov_demand;
         let total_inv: f64 = self.firms.iter().map(|f| f.inventory).sum();
 
         let mut total_sales = 0.0;
@@ -607,6 +902,8 @@ impl Simulation {
         for (h, intent) in self.households.iter_mut().zip(intents.iter()) {
             h.money -= intent * fill;
         }
+        let gov_paid = gov_demand * fill;
+        self.gov_balance -= gov_paid;
 
         // 6. Interest accrual: borrowers pay interest on the working-capital
         //    loan they carried through the tick. Interest flows to the bank as
@@ -623,6 +920,10 @@ impl Simulation {
             }
             self.bank.equity += interest;
         }
+        // The treasury pays the policy rate on its overdraft (the public debt).
+        let debt_interest = (0.0 - self.gov_balance).max(0.0) * rate;
+        self.gov_balance -= debt_interest;
+        self.bank.equity += debt_interest;
 
         // 7. Repayment and dividends. Firms run lean: they repay their loan
         //    from revenue and pay out any remaining profit to households as
@@ -634,11 +935,17 @@ impl Simulation {
             f.money -= repay;
             f.loan -= repay;
             if f.money > 0.0 {
-                dividend_pool += f.money;
+                let tax = f.money * profit_tax;
+                taxes += tax;
+                self.gov_balance += tax;
+                dividend_pool += f.money - tax;
                 f.money = 0.0;
             }
         }
-        let dividend_each = dividend_pool / households;
+        let dividend_tax = dividend_pool * income_tax;
+        taxes += dividend_tax;
+        self.gov_balance += dividend_tax;
+        let dividend_each = (dividend_pool - dividend_tax) / households;
         for h in &mut self.households {
             h.money += dividend_each;
         }
@@ -661,6 +968,12 @@ impl Simulation {
         self.series.credit.push(credit);
         self.series.inflation.push(inflation);
         self.series.broad_money.push(broad_money);
+
+        self.series.nominal_gdp.push(total_sales);
+        self.series.taxes.push(taxes);
+        self.series.gov_spending.push(gov_paid);
+        self.series.deficit.push(gov_paid + debt_interest - taxes);
+        self.series.gov_debt.push(0.0 - self.gov_balance);
 
         self.tick += 1;
     }
@@ -693,6 +1006,18 @@ impl Simulation {
             credit: last_or(&s.credit, 0.0),
             broad_money: last_or(&s.broad_money, 0.0),
             base_money: self.base_money,
+            taxes: last_or(&s.taxes, 0.0),
+            gov_spending: last_or(&s.gov_spending, 0.0),
+            deficit: last_or(&s.deficit, 0.0),
+            gov_debt: 0.0 - self.gov_balance,
+            debt_to_gdp: {
+                let annual = last_or(&s.nominal_gdp, 0.0) * PERIODS_PER_YEAR;
+                if annual > EPS {
+                    (0.0 - self.gov_balance) / annual * 100.0
+                } else {
+                    0.0
+                }
+            },
         }
     }
 }
@@ -771,12 +1096,14 @@ pub fn sparkline(data: &[f64], width: usize) -> String {
 /// Serialize the run as CSV with a header and one row per tick.
 #[must_use]
 pub fn to_csv(series: &Series) -> String {
-    let mut out =
-        String::from("tick,cpi,gdp,unemployment,inflation,avg_money,credit,broad_money\n");
+    let mut out = String::from(
+        "tick,cpi,gdp,unemployment,inflation,avg_money,credit,broad_money,\
+         nominal_gdp,taxes,gov_spending,deficit,gov_debt\n",
+    );
     for i in 0..series.len() {
         let _ = writeln!(
             out,
-            "{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{}",
             i,
             series.cpi[i],
             series.gdp[i],
@@ -785,16 +1112,30 @@ pub fn to_csv(series: &Series) -> String {
             series.avg_money[i],
             series.credit[i],
             series.broad_money[i],
+            series.nominal_gdp[i],
+            series.taxes[i],
+            series.gov_spending[i],
+            series.deficit[i],
+            series.gov_debt[i],
         );
     }
     out
 }
 
 /// Serialize the whole run (parameters, series, summary) as JSON.
+/// `scenario` is the scenario name, when the run came from one.
 #[must_use]
-pub fn to_json(params: &Params, series: &Series, summary: &Summary) -> String {
+pub fn to_json(
+    params: &Params,
+    series: &Series,
+    summary: &Summary,
+    scenario: Option<&str>,
+) -> String {
     let mut out = String::new();
     out.push_str("{\n");
+    if let Some(name) = scenario {
+        let _ = writeln!(out, "  \"scenario\": {},", json_string(name));
+    }
 
     // params
     out.push_str("  \"params\": {\n");
@@ -805,7 +1146,16 @@ pub fn to_json(params: &Params, series: &Series, summary: &Summary) -> String {
     let _ = writeln!(out, "    \"interest_rate\": {},", params.interest_rate);
     let _ = writeln!(out, "    \"money_growth\": {},", params.money_growth);
     let _ = writeln!(out, "    \"mpc\": {},", params.mpc);
-    let _ = writeln!(out, "    \"reserve_ratio\": {}", params.reserve_ratio);
+    let _ = writeln!(out, "    \"reserve_ratio\": {},", params.reserve_ratio);
+    let _ = writeln!(out, "    \"income_tax\": {},", params.income_tax);
+    let _ = writeln!(out, "    \"profit_tax\": {},", params.profit_tax);
+    let _ = writeln!(out, "    \"gov_spending\": {},", params.gov_spending);
+    let specs: Vec<String> = params
+        .shocks
+        .iter()
+        .map(|s| json_string(&s.spec()))
+        .collect();
+    let _ = writeln!(out, "    \"shocks\": [{}]", specs.join(", "));
     out.push_str("  },\n");
 
     // series
@@ -816,7 +1166,12 @@ pub fn to_json(params: &Params, series: &Series, summary: &Summary) -> String {
     push_json_array(&mut out, "inflation", &series.inflation, false);
     push_json_array(&mut out, "avg_money", &series.avg_money, false);
     push_json_array(&mut out, "credit", &series.credit, false);
-    push_json_array(&mut out, "broad_money", &series.broad_money, true);
+    push_json_array(&mut out, "broad_money", &series.broad_money, false);
+    push_json_array(&mut out, "nominal_gdp", &series.nominal_gdp, false);
+    push_json_array(&mut out, "taxes", &series.taxes, false);
+    push_json_array(&mut out, "gov_spending", &series.gov_spending, false);
+    push_json_array(&mut out, "deficit", &series.deficit, false);
+    push_json_array(&mut out, "gov_debt", &series.gov_debt, true);
     out.push_str("  },\n");
 
     // summary
@@ -828,7 +1183,12 @@ pub fn to_json(params: &Params, series: &Series, summary: &Summary) -> String {
     let _ = writeln!(out, "    \"avg_money\": {},", summary.avg_money);
     let _ = writeln!(out, "    \"credit\": {},", summary.credit);
     let _ = writeln!(out, "    \"broad_money\": {},", summary.broad_money);
-    let _ = writeln!(out, "    \"base_money\": {}", summary.base_money);
+    let _ = writeln!(out, "    \"base_money\": {},", summary.base_money);
+    let _ = writeln!(out, "    \"taxes\": {},", summary.taxes);
+    let _ = writeln!(out, "    \"gov_spending\": {},", summary.gov_spending);
+    let _ = writeln!(out, "    \"deficit\": {},", summary.deficit);
+    let _ = writeln!(out, "    \"gov_debt\": {},", summary.gov_debt);
+    let _ = writeln!(out, "    \"debt_to_gdp\": {}", summary.debt_to_gdp);
     out.push_str("  }\n");
 
     out.push_str("}\n");
@@ -845,4 +1205,20 @@ fn push_json_array(out: &mut String, name: &str, data: &[f64], last: bool) {
     }
     out.push(']');
     out.push_str(if last { "\n" } else { ",\n" });
+}
+
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
